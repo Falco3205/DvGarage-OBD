@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DvGarage OBD</title>
+<style>
+  :root { --bg:#f4f5f7; --card:#fff; --text:#1c2230; --muted:#667085; --line:#e3e6ec; --accent:#1f6feb; --danger:#c62828; --ok:#2e7d32; --warn:#b26a00; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --card:#1a2029; --text:#e6e9ef; --muted:#98a2b3; --line:#2a3240; --accent:#5b9dff; --danger:#ef6b6b; --ok:#5cc46a; --warn:#e0a03a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 system-ui, sans-serif; }
+  header { display:flex; align-items:center; justify-content:space-between; padding:14px 16px; background:var(--card); border-bottom:1px solid var(--line); }
+  h1 { font-size:18px; margin:0; }
+  main { max-width:960px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .row.between { justify-content:space-between; }
+  input { padding:8px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); font:inherit; min-width:0; }
+  button { padding:8px 14px; border:0; border-radius:6px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; }
+  button.danger { background:var(--danger); }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:13px; }
+  .muted { color:var(--muted); }
+  .badge { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px; border:1px solid var(--line); }
+  .badge.on { color:var(--danger); border-color:var(--danger); }
+  .badge.off { color:var(--ok); border-color:var(--ok); }
+  .badge.wait { color:var(--warn); border-color:var(--warn); }
+  .device { cursor:pointer; }
+  .device:hover td { background:var(--bg); }
+  .key { font-family:ui-monospace, monospace; word-break:break-all; background:var(--bg); padding:8px; border-radius:6px; }
+  .hidden { display:none; }
+  #error { color:var(--danger); min-height:1.4em; }
+</style>
+</head>
+<body>
+<header>
+  <h1>DvGarage OBD</h1>
+  <button id="logout" class="ghost hidden">Esci</button>
+</header>
+<main>
+  <section id="login" class="card">
+    <form class="row" id="loginForm">
+      <input id="token" type="password" placeholder="Token amministratore" autocomplete="current-password" required>
+      <button>Accedi</button>
+    </form>
+  </section>
+
+  <div id="error"></div>
+
+  <section id="devicesCard" class="card hidden">
+    <div class="row between">
+      <strong>Dispositivi</strong>
+      <form class="row" id="newDevice">
+        <input id="deviceName" placeholder="Nome veicolo / cliente" maxlength="100" required>
+        <button>Aggiungi</button>
+      </form>
+    </div>
+    <div id="newKey" class="hidden">
+      <p class="muted">Chiave del dispositivo (mostrata una sola volta, inseriscila nell'app):</p>
+      <div class="key" id="newKeyValue"></div>
+    </div>
+    <table>
+      <thead><tr><th>Nome</th><th>VIN</th><th>MIL</th><th>Ultimo contatto</th></tr></thead>
+      <tbody id="devices"></tbody>
+    </table>
+  </section>
+
+  <section id="detail" class="card hidden">
+    <div class="row between">
+      <strong id="detailTitle"></strong>
+      <div class="row">
+        <button id="rescan" class="ghost">Rileggi errori</button>
+        <button id="clear" class="danger">Cancella errori</button>
+        <button id="remove" class="ghost">Elimina dispositivo</button>
+      </div>
+    </div>
+    <h3>Errori attuali <span id="scanTime" class="muted"></span></h3>
+    <table>
+      <thead><tr><th>Codice</th><th>Tipo</th><th>Sistema</th><th>Descrizione</th></tr></thead>
+      <tbody id="dtcs"></tbody>
+    </table>
+    <h3>Comandi</h3>
+    <table>
+      <thead><tr><th>Data</th><th>Comando</th><th>Stato</th><th>Esito</th><th></th></tr></thead>
+      <tbody id="commands"></tbody>
+    </table>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const KIND = { stored: 'Memorizzato', pending: 'In attesa', permanent: 'Permanente' };
+const CMD = { clear_dtc: 'Cancella errori', rescan: 'Rileggi errori' };
+const STATUS = { pending: 'In coda', delivered: 'Inviato', done: 'Eseguito', failed: 'Fallito', cancelled: 'Annullato', expired: 'Scaduto' };
+let token = sessionStorage.getItem('adminToken') || '';
+let selected = null;
+let timer = null;
+
+function el(tag, text, cls) {
+  const n = document.createElement(tag);
+  if (text !== undefined && text !== null) n.textContent = text;
+  if (cls) n.className = cls;
+  return n;
+}
+const fmt = (ms) => (ms ? new Date(ms).toLocaleString('it-IT') : '—');
+
+async function api(path, options = {}) {
+  const res = await fetch('/api/admin' + path, {
+    ...options,
+    headers: { authorization: 'Bearer ' + token, ...(options.body ? { 'content-type': 'application/json' } : {}) },
+  });
+  if (res.status === 401) { logout(); throw new Error('Token non valido'); }
+  const data = res.status === 204 ? null : await res.json();
+  if (!res.ok) throw new Error(data.error || 'Errore ' + res.status);
+  return data;
+}
+
+function fail(err) { $('error').textContent = err.message; }
+
+function row(cells) {
+  const tr = el('tr');
+  for (const c of cells) {
+    const td = el('td');
+    td.append(c instanceof Node ? c : document.createTextNode(c));
+    tr.append(td);
+  }
+  return tr;
+}
+
+async function loadDevices() {
+  const { devices } = await api('/devices');
+  const body = $('devices');
+  body.replaceChildren();
+  for (const d of devices) {
+    const mil = d.milOn === null ? '—' : el('span', d.milOn ? 'Accesa' : 'Spenta', 'badge ' + (d.milOn ? 'on' : 'off'));
+    const tr = row([d.name, d.vin || '—', mil, fmt(d.lastSeenAt)]);
+    tr.className = 'device';
+    tr.onclick = () => { selected = d.id; $('newKey').classList.add('hidden'); loadDetail(); };
+    body.append(tr);
+  }
+}
+
+async function loadDetail() {
+  if (!selected) return;
+  const { device, scans, commands } = await api('/devices/' + selected);
+  $('detail').classList.remove('hidden');
+  $('detailTitle').textContent = device.name + (device.vin ? ' · ' + device.vin : '');
+  const scan = scans[0];
+  $('scanTime').textContent = scan ? '(letti il ' + fmt(scan.createdAt) + ')' : '';
+  const dtcs = $('dtcs');
+  dtcs.replaceChildren();
+  if (!scan) dtcs.append(row(['Nessuna lettura ricevuta', '', '', '']));
+  else if (!scan.dtcs.length) dtcs.append(row(['Nessun errore presente', '', '', '']));
+  else for (const d of scan.dtcs) dtcs.append(row([d.code, KIND[d.kind] || d.kind, d.system, d.description || '—']));
+
+  const list = $('commands');
+  list.replaceChildren();
+  for (const c of commands) {
+    const cancel = el('button', 'Annulla', 'ghost');
+    cancel.onclick = () => act(() => api(`/devices/${selected}/commands/${c.id}`, { method: 'DELETE' }));
+    const open = c.status === 'pending';
+    list.append(row([fmt(c.createdAt), CMD[c.type] || c.type,
+      el('span', STATUS[c.status] || c.status, 'badge ' + (open || c.status === 'delivered' ? 'wait' : '')),
+      c.message || '', open ? cancel : '']));
+  }
+  const busy = commands.some((c) => c.status === 'pending' || c.status === 'delivered');
+  $('clear').disabled = busy;
+  $('rescan').disabled = busy;
+}
+
+async function act(fn) {
+  $('error').textContent = '';
+  try { await fn(); await refresh(); } catch (err) { fail(err); }
+}
+
+async function refresh() {
+  await loadDevices();
+  await loadDetail();
+}
+
+function showApp() {
+  $('login').classList.add('hidden');
+  $('devicesCard').classList.remove('hidden');
+  $('logout').classList.remove('hidden');
+  refresh().catch(fail);
+  timer = setInterval(() => refresh().catch(fail), 5000);
+}
+
+function logout() {
+  token = '';
+  sessionStorage.removeItem('adminToken');
+  clearInterval(timer);
+  selected = null;
+  for (const id of ['devicesCard', 'detail', 'logout']) $(id).classList.add('hidden');
+  $('login').classList.remove('hidden');
+}
+
+$('loginForm').onsubmit = (e) => {
+  e.preventDefault();
+  token = $('token').value.trim();
+  api('/devices').then(() => { sessionStorage.setItem('adminToken', token); $('error').textContent = ''; showApp(); }).catch(fail);
+};
+$('logout').onclick = logout;
+$('newDevice').onsubmit = (e) => {
+  e.preventDefault();
+  act(async () => {
+    const { device } = await api('/devices', { method: 'POST', body: JSON.stringify({ name: $('deviceName').value }) });
+    $('deviceName').value = '';
+    $('newKeyValue').textContent = device.key;
+    $('newKey').classList.remove('hidden');
+  });
+};
+$('clear').onclick = () => {
+  if (confirm('Cancellare gli errori dalla centralina del veicolo?')) {
+    act(() => api(`/devices/${selected}/commands`, { method: 'POST', body: JSON.stringify({ type: 'clear_dtc' }) }));
+  }
+};
+$('rescan').onclick = () => act(() => api(`/devices/${selected}/commands`, { method: 'POST', body: JSON.stringify({ type: 'rescan' }) }));
+$('remove').onclick = () => {
+  if (confirm('Eliminare il dispositivo e tutto il suo storico?')) {
+    act(async () => { await api('/devices/' + selected, { method: 'DELETE' }); selected = null; $('detail').classList.add('hidden'); });
+  }
+};
+
+if (token) api('/devices').then(showApp).catch(() => logout());
+</script>
+</body>
+</html>
