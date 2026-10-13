@@ -57,6 +57,12 @@ after(() => {
   server.close();
 });
 
+test('an email address can be the admin username', async () => {
+  const mail = createStore(openDatabase(':memory:'), { sessionTtlMs: 1000, commandTtlMs: 1, deliveryTimeoutMs: 1 });
+  assert.equal(await ensureAdmin(mail, { adminUsername: 'info@dvgarage.it', adminPassword: 'long-enough-1' }), true);
+  assert.equal(mail.findUserCredentials('INFO@dvgarage.it').user.role, 'admin');
+});
+
 test('ensureAdmin needs a password only when no admin exists', async () => {
   const empty = createStore(openDatabase(':memory:'), { sessionTtlMs: 1, commandTtlMs: 1, deliveryTimeoutMs: 1 });
   await assert.rejects(ensureAdmin(empty, { adminUsername: 'admin', adminPassword: '' }), /ADMIN_PASSWORD/);

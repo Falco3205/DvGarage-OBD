@@ -10,7 +10,7 @@ const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 const MAX_BODY = 256 * 1024;
 const DTC_KINDS = new Set(['stored', 'pending', 'permanent']);
-const USERNAME_PATTERN = /^[a-z0-9._-]{3,32}$/i;
+const USERNAME_PATTERN = /^[a-z0-9._@+-]{3,64}$/i;
 const MAX_DEVICES_PER_CUSTOMER = 10;
 const LOGIN_MAX_FAILURES = 5;
 const LOGIN_WINDOW_MS = 15 * 60_000;
@@ -83,7 +83,7 @@ function parsePassword(value) {
 function parseUsername(value) {
   const username = String(value ?? '').trim();
   if (!USERNAME_PATTERN.test(username)) {
-    throw new HttpError(400, 'username must be 3-32 characters: letters, digits, . _ -');
+    throw new HttpError(400, 'username must be 3-64 characters: letters, digits, . _ - @ +');
   }
   return username;
 }
