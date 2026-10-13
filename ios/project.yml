@@ -1,0 +1,32 @@
+name: DvGarageOBD
+options:
+  bundleIdPrefix: it.dvgarage
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  OBDCore:
+    path: .
+targets:
+  DvGarageOBD:
+    type: application
+    platform: iOS
+    sources:
+      - DvGarageOBD
+    dependencies:
+      - package: OBDCore
+    info:
+      path: DvGarageOBD/Info.plist
+      properties:
+        CFBundleDisplayName: DvGarage OBD
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIBackgroundModes: [bluetooth-central]
+        NSBluetoothAlwaysUsageDescription: L'app si collega all'adattatore OBD Bluetooth per leggere e cancellare gli errori del veicolo.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: it.dvgarage.obd
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO

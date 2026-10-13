@@ -8,11 +8,36 @@ on:
   workflow_dispatch:
 
 jobs:
-  core-tests:
+  build:
     runs-on: macos-15
     defaults:
       run:
         working-directory: ios
     steps:
       - uses: actions/checkout@v4
-      - run: swift test
+      - name: Core tests
+        run: swift test
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build for simulator
+        run: |
+          xcodebuild -project DvGarageOBD.xcodeproj -scheme DvGarageOBD \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/sim build CODE_SIGNING_ALLOWED=NO | tail -n 40
+          test ${PIPESTATUS[0]} -eq 0
+      - name: Build unsigned device IPA
+        run: |
+          xcodebuild -project DvGarageOBD.xcodeproj -scheme DvGarageOBD \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build/device build CODE_SIGNING_ALLOWED=NO | tail -n 40
+          test ${PIPESTATUS[0]} -eq 0
+          mkdir -p build/ipa/Payload
+          cp -R build/device/Build/Products/Release-iphoneos/DvGarageOBD.app build/ipa/Payload/ 2>/dev/null \
+            || cp -R build/device/Build/Products/Debug-iphoneos/DvGarageOBD.app build/ipa/Payload/
+          (cd build/ipa && zip -qr ../DvGarageOBD-unsigned.ipa Payload)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DvGarageOBD-unsigned-ipa
+          path: ios/build/DvGarageOBD-unsigned.ipa
