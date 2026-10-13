@@ -11,6 +11,8 @@ import android.os.Handler
 import android.os.Looper
 import it.dvgarage.obd.AdapterChoice
 import it.dvgarage.obd.core.ObdTransport
+import it.dvgarage.obd.core.TracingTransport
+import it.dvgarage.obd.service.TraceLog
 
 @SuppressLint("MissingPermission")
 class Adapters(private val context: Context) {
@@ -50,6 +52,7 @@ class Adapters(private val context: Context) {
     fun createTransport(choice: AdapterChoice): ObdTransport {
         val adapter = bluetooth ?: error("Bluetooth is not available on this device")
         val device = adapter.getRemoteDevice(choice.address)
-        return if (choice.ble) BleTransport(context, device) else ClassicTransport.create(adapter, device)
+        val transport = if (choice.ble) BleTransport(context, device) else ClassicTransport.create(adapter, device)
+        return TracingTransport(transport, TraceLog::add)
     }
 }

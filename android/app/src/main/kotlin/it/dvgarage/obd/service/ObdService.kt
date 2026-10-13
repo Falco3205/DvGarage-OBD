@@ -25,13 +25,16 @@ class ObdService : Service() {
         }
         startInForeground()
         if (runner == null) {
-            val config = Settings(this).load()
-            if (!config.isComplete) {
-                AppState.update(Phase.ERROR, "Configuration incomplete")
+            val settings = Settings(this)
+            val account = settings.account()
+            val vehicle = settings.vehicle()
+            val adapter = settings.adapter()
+            if (account == null || vehicle == null || adapter == null) {
+                AppState.update(Phase.ERROR, "Configurazione incompleta")
                 stopSelf()
                 return START_NOT_STICKY
             }
-            runner = ObdRunner(this, config).also { it.start() }
+            runner = ObdRunner(this, account.serverUrl, vehicle.key, adapter).also { it.start() }
         }
         return START_STICKY
     }
@@ -45,12 +48,12 @@ class ObdService : Service() {
     private fun startInForeground() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "OBD connection", NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(CHANNEL_ID, "Connessione OBD", NotificationManager.IMPORTANCE_LOW),
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setContentTitle("DvGarage OBD")
-            .setContentText("Connected to the vehicle adapter and the server")
+            .setContentText("Collegato all'adattatore e al server")
             .setOngoing(true)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

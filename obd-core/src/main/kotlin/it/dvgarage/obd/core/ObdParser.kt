@@ -20,29 +20,43 @@ object ObdParser {
             .filter { it.isNotEmpty() && it != "SEARCHING..." && !isBusInitOk(it) }
 
         var sawNoData = false
-        val direct = mutableListOf<String>()
-        val frames = mutableListOf<String>()
-        var declaredLength: Int? = null
+        val messages = mutableListOf<ByteArray>()
+        val group = StringBuilder()
+        var groupLength: Int? = null
+        var pendingLength: Int? = null
 
-        for (line in lines) {
+        fun closeGroup() {
+            if (group.isEmpty()) return
+            val bytes = hexToBytes(group.toString())
+            messages += groupLength?.let { bytes.copyOf(minOf(it, bytes.size)) } ?: bytes
+            group.setLength(0)
+            groupLength = null
+        }
+
+        for ((index, line) in lines.withIndex()) {
+            val indexed = indexedLine.matchEntire(line)
             when {
                 line == "NODATA" -> sawNoData = true
-                line == "?" || errorMarkers.any { line.contains(it) } ->
-                    return Reply.Failure(line)
-                indexedLine.matches(line) -> frames += indexedLine.matchEntire(line)!!.groupValues[1]
-                lengthLine.matches(line) && frames.isEmpty() && declaredLength == null && lines.any { indexedLine.matches(it) } ->
-                    declaredLength = line.toInt(16)
-                hexLine.matches(line) && line.length % 2 == 0 -> direct += line
+                line == "?" || errorMarkers.any { line.contains(it) } -> return Reply.Failure(line)
+                indexed != null -> {
+                    if (line.startsWith("0:")) {
+                        closeGroup()
+                        groupLength = pendingLength
+                    }
+                    pendingLength = null
+                    if (indexed.groupValues[1].length % 2 != 0) return Reply.Failure("Unexpected reply: $line")
+                    group.append(indexed.groupValues[1])
+                }
+                lengthLine.matches(line) && lines.getOrNull(index + 1)?.startsWith("0:") == true ->
+                    pendingLength = line.toInt(16)
+                hexLine.matches(line) && line.length % 2 == 0 -> {
+                    closeGroup()
+                    messages += hexToBytes(line)
+                }
                 else -> return Reply.Failure("Unexpected reply: $line")
             }
         }
-
-        val messages = mutableListOf<ByteArray>()
-        if (frames.isNotEmpty()) {
-            val bytes = hexToBytes(frames.joinToString(""))
-            messages += declaredLength?.let { bytes.copyOf(minOf(it, bytes.size)) } ?: bytes
-        }
-        direct.mapTo(messages) { hexToBytes(it) }
+        closeGroup()
 
         return when {
             messages.isNotEmpty() -> Reply.Messages(messages)

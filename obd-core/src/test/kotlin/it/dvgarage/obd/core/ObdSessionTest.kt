@@ -83,3 +83,17 @@ class ObdSessionTest {
         assertFailsWith<ObdTimeoutException> { transport.exchange("ATZ", 100) }
     }
 }
+
+class TracingTransportTest {
+    @Test
+    fun `records commands and replies`() {
+        val log = mutableListOf<String>()
+        val inner = object : ObdTransport {
+            override fun open() = Unit
+            override fun close() = Unit
+            override fun exchange(command: String, timeoutMs: Long) = "41 00 BE 3E\r"
+        }
+        TracingTransport(inner) { log += it }.exchange("0100", 100)
+        assertEquals(listOf("> 0100", "< 41 00 BE 3E"), log)
+    }
+}

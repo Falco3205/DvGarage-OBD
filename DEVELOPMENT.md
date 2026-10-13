@@ -20,25 +20,32 @@ What was written and how, for future maintenance.
 
 ## server (`server/`)
 
-- `src/store.js`: SQLite access. Devices (API key stored as SHA-256), scans + DTCs, commands with states `pending → delivered → done|failed`, plus `cancelled` / `expired`. One open command per type per device (idempotent enqueue). Delivered-but-unanswered commands return to `pending` after `DELIVERY_TIMEOUT_SECONDS`; pending ones expire after `COMMAND_TTL_SECONDS` so a stale "clear" is never executed later.
-- `src/app.js`: routing, auth (constant-time admin token compare, device key lookup), validation, long-poll waiters, static dashboard.
-- `src/dtc.js`: DTC validation and a small description table (unknown codes still show system/type).
-- `public/index.html`: dashboard, no build step; polls every 5 s.
-- Tests: `npm test` (`test/api.test.js`, end-to-end over HTTP with an in-memory DB).
+- `src/db.js`: schema (users, sessions, devices, scans, commands, workshop reads) and a migration adding `devices.user_id` to databases created by the first version.
+- `src/password.js`: scrypt hashing/verification. `src/store.js`: all SQL. Sessions and device keys are stored as SHA-256 hashes; commands have states `pending → delivered → done|failed` plus `cancelled`/`expired`, one open command per type per vehicle. Delivered-but-unanswered commands return to `pending` after `DELIVERY_TIMEOUT_SECONDS`; pending ones expire after `COMMAND_TTL_SECONDS`, so a stale "clear" is never executed later.
+- `src/app.js`: routing, authorization (admin vs customer ownership checks, `clear_dtc` admin-only), validation, login throttling (in memory, per address+user, with a dummy hash compare for unknown users), long-poll waiters, static dashboard. `ensureAdmin` seeds the first admin from env.
+- `src/dtc.js`: DTC validation and a small description table.
+- `public/index.html`: dashboard. Login; customers see their vehicles and can request rescans; admins also get Clienti (create/disable/reset password/delete) and Officina (stored direct readings) tabs.
+- Tests: `npm test` (`test/api.test.js`, 20 end-to-end tests over HTTP with an in-memory DB). Dashboard additionally smoke-tested with headless Chromium for both roles.
 
 ## android (`android/`)
 
+- `Settings.kt`: persisted account (server, session token, role), linked vehicle (id + device key), chosen adapter.
+- `server/HttpJson.kt`, `ServerClient.kt` (device-key calls used by the service), `UserApi.kt` (login, vehicles, key rotation, customers, workshop reads).
 - `bluetooth/ClassicTransport.kt`: SPP socket; tries insecure SPP, secure SPP, then reflective RFCOMM channel 1 (needed by many clones).
-- `bluetooth/BleTransport.kt`: GATT; picks the notify + write characteristics generically (covers FFE0/FFF0/18F0 style adapters), 20-byte write chunks.
-- `bluetooth/Adapters.kt`: paired list, BLE scan, transport factory.
-- `server/ServerClient.kt`: `HttpURLConnection` client with `abort()` to unblock a long poll on stop.
-- `service/ObdRunner.kt`: worker thread. Connect → init → upload snapshot → loop {long poll; run `clear_dtc`/`rescan`; periodic rescan}. Bluetooth failures reconnect with exponential backoff (3 s → 60 s); network failures retry without dropping the adapter; an ECU refusing to clear is reported as a failed command without tearing down the link.
-- `service/ObdService.kt`: foreground service (`connectedDevice`) hosting the runner. `service/AppState.kt`: state flow for the UI.
-- `ui/`: Compose screen with settings, adapter picker, status and last DTC list.
+- `bluetooth/BleTransport.kt`: GATT; picks notify + write characteristics generically, 20-byte write chunks.
+- `bluetooth/Adapters.kt`: paired list, BLE scan, transport factory (every transport is wrapped in `TracingTransport` feeding `service/TraceLog`).
+- `service/ObdRunner.kt` + `ObdService.kt`: monitoring. Connect → init → upload snapshot → loop {long poll; `clear_dtc`/`rescan`; periodic rescan}. Bluetooth failures reconnect with exponential backoff; network failures retry without dropping the adapter; an ECU refusing to clear is reported as a failed command without tearing down the link.
+- `service/WorkshopRunner.kt`: admin direct mode. Each action opens the adapter, runs, closes. State exposed as a flow; singleton so it survives activity recreation.
+- `ui/`: `LoginScreen`, `HomeScreen` (tabs), `VehicleTab`, `WorkshopTab` (admin only), `LogTab`, shared `Components`; `MainActivity` holds the state and wiring.
 - `obd-core` is included from `../obd-core` in `android/settings.gradle.kts`.
 
 ## Verification status
 
-- `obd-core`: 19 unit tests pass.
-- `server`: 7 end-to-end tests pass.
-- `android`: written but **not compiled** in the authoring environment (no Android SDK reachable). First step on a machine with the SDK: `cd android && ./gradlew :app:assembleDebug`, then test against a real adapter.
+- `obd-core`: 21 unit tests pass.
+- `server`: 20 end-to-end tests pass.
+- `android`: written but **not compiled** in the authoring environment (neither the Android SDK nor Google Maven is reachable there). First step on a machine with the SDK: `cd android && ./gradlew :app:assembleDebug`, then test against a real adapter and share the Log tab output if anything misbehaves.
+
+## Known limits
+
+- Multi-ECU vehicles answering mode 03 are parsed with headers off (`ATH0`); frames of different ECUs are kept apart when each has its own length line, but exotic adapters/vehicles may need header-aware parsing.
+- Web Bluetooth is not used: browsers cannot talk to Classic SPP adapters, so direct reading lives in the Android app.

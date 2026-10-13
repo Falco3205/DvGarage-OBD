@@ -1,7 +1,7 @@
 package it.dvgarage.obd.service
 
 import android.content.Context
-import it.dvgarage.obd.Config
+import it.dvgarage.obd.AdapterChoice
 import it.dvgarage.obd.bluetooth.Adapters
 import it.dvgarage.obd.core.Elm327Client
 import it.dvgarage.obd.core.ObdException
@@ -9,21 +9,26 @@ import it.dvgarage.obd.core.ObdSession
 import it.dvgarage.obd.core.ObdTransport
 import it.dvgarage.obd.server.ServerClient
 import it.dvgarage.obd.server.ServerCommand
-import it.dvgarage.obd.server.ServerException
+import it.dvgarage.obd.server.ApiException
 import java.io.IOException
 
 private class CommandRefused(message: String) : Exception(message)
 
-class ObdRunner(context: Context, private val config: Config) {
+class ObdRunner(
+    context: Context,
+    serverUrl: String,
+    deviceKey: String,
+    private val adapter: AdapterChoice,
+) {
     private val adapters = Adapters(context)
-    private val server = ServerClient(config.serverUrl, config.deviceKey)
+    private val server = ServerClient(serverUrl, deviceKey)
     private val thread = Thread(::loop, "obd-runner")
 
     @Volatile private var running = true
     @Volatile private var transport: ObdTransport? = null
 
     fun start() {
-        AppState.update(Phase.CONNECTING, "Connecting to ${config.adapter?.name}")
+        AppState.update(Phase.CONNECTING, "Connessione a ${adapter.name}")
         thread.start()
     }
 
@@ -49,13 +54,12 @@ class ObdRunner(context: Context, private val config: Config) {
                 backoffMs = minOf(backoffMs * 2, MAX_BACKOFF_MS)
             }
         }
-        AppState.update(Phase.STOPPED, "Stopped")
+        AppState.update(Phase.STOPPED, "Fermato")
     }
 
     private fun runSession() {
-        val choice = requireNotNull(config.adapter)
-        AppState.update(Phase.CONNECTING, "Connecting to ${choice.name}")
-        val link = adapters.createTransport(choice)
+        AppState.update(Phase.CONNECTING, "Connessione a ${adapter.name}")
+        val link = adapters.createTransport(adapter)
         transport = link
         try {
             link.open()
@@ -74,8 +78,8 @@ class ObdRunner(context: Context, private val config: Config) {
         while (running) {
             val command = try {
                 server.nextCommand(POLL_SECONDS)
-            } catch (e: ServerException) {
-                if (e.status == 401) throw e
+            } catch (e: ApiException) {
+                if (e.status == 401) throw IOException("Veicolo non più collegato: accedi di nuovo e ricollega il veicolo")
                 reportServerProblem(e)
                 continue
             } catch (e: IOException) {
@@ -83,9 +87,12 @@ class ObdRunner(context: Context, private val config: Config) {
                 reportServerProblem(e)
                 continue
             }
-            when (command?.type) {
-                "clear_dtc" -> execute(command) { clear(obd) }
-                "rescan" -> execute(command) { syncSnapshot(obd); "Rescan completed" }
+            if (command != null) {
+                when (command.type) {
+                    "clear_dtc" -> execute(command) { clear(obd) }
+                    "rescan" -> execute(command) { syncSnapshot(obd); "Rilettura completata" }
+                    else -> server.reportResult(command.id, false, "Comando non supportato")
+                }
             }
             if (System.currentTimeMillis() - lastSync >= RESCAN_INTERVAL_MS) {
                 syncSnapshot(obd)
@@ -95,9 +102,9 @@ class ObdRunner(context: Context, private val config: Config) {
     }
 
     private fun clear(obd: ObdSession): String {
-        if (!obd.clearCodes()) throw CommandRefused("The ECU refused to clear the codes (engine off, ignition on required)")
+        if (!obd.clearCodes()) throw CommandRefused("La centralina ha rifiutato la cancellazione (quadro acceso, motore spento)")
         val remaining = syncSnapshot(obd)
-        return if (remaining == 0) "Codes cleared" else "Cleared, but $remaining code(s) are still reported"
+        return if (remaining == 0) "Errori cancellati" else "Cancellati, ma $remaining errore/i risultano ancora presenti"
     }
 
     private fun execute(command: ServerCommand, action: () -> String) {
@@ -106,7 +113,7 @@ class ObdRunner(context: Context, private val config: Config) {
         } catch (e: CommandRefused) {
             server.reportResult(command.id, false, e.message.orEmpty())
         } catch (e: ObdException) {
-            server.reportResult(command.id, false, e.message ?: "Adapter error")
+            server.reportResult(command.id, false, e.message ?: "Errore adattatore")
             throw e
         }
     }
@@ -119,7 +126,7 @@ class ObdRunner(context: Context, private val config: Config) {
     }
 
     private fun reportServerProblem(e: IOException) {
-        AppState.update(Phase.ONLINE, "Server unreachable: ${e.message}")
+        AppState.update(Phase.ONLINE, "Server non raggiungibile: ${e.message}")
         pause(SERVER_RETRY_MS)
     }
 

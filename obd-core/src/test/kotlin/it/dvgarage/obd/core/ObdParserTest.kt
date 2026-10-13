@@ -41,6 +41,14 @@ class ObdParserTest {
     }
 
     @Test
+    fun `keeps multi frame replies of different ECUs apart`() {
+        val raw = "00A\r0: 43 04 01 33 04 20\r1: 00 00 00 00 00 00\r008\r0: 43 03 01 71 03 00\r1: 00 00 00 00 00 00\r"
+        val parsed = messages(raw)
+        assertEquals(2, parsed.size)
+        assertEquals(listOf("P0133", "P0420", "P0171", "P0300"), codes(raw, 0x43))
+    }
+
+    @Test
     fun `merges the same code reported by two ECUs`() {
         assertEquals(listOf("P0300"), codes("43 01 03 00\r43 01 03 00\r", 0x43))
     }

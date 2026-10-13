@@ -22,42 +22,63 @@ Requires Node.js >= 22.13.
 
 ```
 cd server
-ADMIN_TOKEN=<at least 16 random chars> npm start
+ADMIN_PASSWORD=<at least 8 chars> npm start
 npm test
 ```
 
+On first start, if no administrator exists, one is created from `ADMIN_USERNAME` (default `admin`) and `ADMIN_PASSWORD`. After that `ADMIN_PASSWORD` is no longer needed.
+
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ADMIN_TOKEN` | required | Bearer token for the dashboard/admin API |
+| `ADMIN_USERNAME` | `admin` | Username of the first administrator |
+| `ADMIN_PASSWORD` | — | Required only while no administrator exists |
 | `PORT` | `3000` | Listen port |
 | `DB_PATH` | `./data/obd.sqlite` | SQLite file |
+| `SESSION_TTL_DAYS` | `30` | Login session lifetime |
 | `COMMAND_TTL_SECONDS` | `600` | Queued commands not picked up in time expire |
 | `DELIVERY_TIMEOUT_SECONDS` | `60` | A delivered command with no result is re-queued |
 
-Open `http://host:3000/`, log in with the admin token, add a device (vehicle) and copy its key, shown once. **Run the server behind HTTPS**: the app refuses cleartext HTTP and keys travel as bearer tokens.
+**Run the server behind HTTPS**: the app refuses cleartext HTTP and sessions travel as bearer tokens.
+
+### Users and roles
+
+- **Admin (officina)**: creates customers, sees every vehicle, can clear codes remotely, and can store direct workshop readings.
+- **Customer**: logs in on the web or in the app, registers their own vehicles (max 10), sees their codes and can request a rescan. Clearing codes is reserved to the workshop.
+
+Passwords are hashed with scrypt, sessions are random tokens stored hashed, logins are throttled (5 failures / 15 min per user and address), disabling a user or changing a password revokes their sessions.
 
 ### API
 
-Device (Bearer = device key):
+Auth: `POST /api/auth/login` `{username, password}` → `{token, user}`; `POST /api/auth/logout`; `GET /api/me`; `POST /api/me/password`.
+
+Vehicles (session token; customers see only their own, admins all):
+
+- `GET/POST /api/me/devices`
+- `GET/DELETE /api/devices/:id`
+- `POST /api/devices/:id/key` — issues a new device key (used by the app to link a phone to an existing vehicle)
+- `POST /api/devices/:id/commands` `{ type: rescan|clear_dtc }` (`clear_dtc` admin only)
+- `DELETE /api/devices/:id/commands/:commandId` (pending only)
+
+Admin only:
+
+- `GET/POST /api/admin/users`, `PATCH/DELETE /api/admin/users/:id`
+- `GET/POST /api/admin/devices`
+- `GET/POST /api/admin/workshop/reads`, `DELETE /api/admin/workshop/reads/:id`
+
+Device (Bearer = device key, used by the app's monitoring service):
 
 - `POST /api/device/scans` `{ vin?, milOn, dtcs:[{code, kind: stored|pending|permanent}] }`
 - `GET /api/device/commands/next?wait=20` → `{command}` or `204` (long poll)
 - `POST /api/device/commands/:id/result` `{ ok, message? }`
 
-Admin (Bearer = `ADMIN_TOKEN`):
-
-- `GET/POST /api/admin/devices`, `GET/DELETE /api/admin/devices/:id`
-- `POST /api/admin/devices/:id/commands` `{ type: clear_dtc|rescan }`
-- `DELETE /api/admin/devices/:id/commands/:commandId` (pending only)
-
 ## Android app
 
 Open `android/` in Android Studio (or `./gradlew :app:assembleDebug` with the Android SDK installed).
 
-1. Pair the adapter in Android settings (PIN usually `1234` or `0000`) — or use *Scan BLE* for BLE adapters.
-2. Enter server URL and device key, pick the adapter, press *Start*.
-3. Keep the ignition on. Clearing codes works with engine off, ignition on.
+1. Pair the adapter in Android settings (PIN usually `1234` or `0000`) — or use *Cerca BLE* for BLE adapters.
+2. Log in with the server address and your account.
+3. **Veicolo tab** (customers and admins): pick or create the vehicle, pick the adapter, *Avvia monitoraggio*. The phone then reports codes to the server and executes remote commands.
+4. **Officina tab** (admins only): connect straight to the adapter, *Leggi errori*, *Cancella errori*, and optionally *Salva lettura* on the server with or without a customer. No customer phone involved.
+5. **Log tab**: raw ELM327 traffic; share it when something does not work with a particular adapter.
 
-The app reads mode 01 PID 01 (MIL), 03 (stored), 07 (pending), 0A (permanent), 09 PID 02 (VIN) at connect, on every `rescan` command and every 5 minutes, and executes mode 04 for `clear_dtc`, followed by a rescan whose result is uploaded.
-
-Clearing codes also resets readiness monitors and freeze-frame data; the dashboard asks for confirmation.
+The app reads mode 01 PID 01 (MIL), 03 (stored), 07 (pending), 0A (permanent), 09 PID 02 (VIN), and executes mode 04 for clearing. Keep the ignition on; clearing works with the engine off. Clearing also resets readiness monitors and freeze-frame data.
