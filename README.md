@@ -14,6 +14,7 @@ The car-side app keeps an outbound long-poll connection to the server, so no inb
 | --- | --- |
 | `obd-core/` | Pure Kotlin/JVM ELM327 + OBD-II protocol library (init, DTC/VIN/MIL decoding, clear). Unit tested. |
 | `android/` | Android app (Compose UI + foreground service). Supports Bluetooth Classic (SPP) and BLE adapters. |
+| `ios/` | iPhone app (SwiftUI + CoreBluetooth) and the Swift `OBDCore` package. **BLE adapters only.** Built by GitHub Actions. |
 | `server/` | Node.js API + dashboard, SQLite storage, zero npm dependencies. |
 
 ## Server
@@ -26,7 +27,7 @@ ADMIN_PASSWORD=<at least 8 chars> npm start
 npm test
 ```
 
-On first start, if no administrator exists, one is created from `ADMIN_USERNAME` (default `admin`) and `ADMIN_PASSWORD`. After that `ADMIN_PASSWORD` is no longer needed.
+On first start, if no administrator exists, one is created from `ADMIN_USERNAME` (default `admin`; use `info@dvgarage.it` for the DvGarage admin) and `ADMIN_PASSWORD`. After that `ADMIN_PASSWORD` is no longer needed.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -82,3 +83,15 @@ Open `android/` in Android Studio (or `./gradlew :app:assembleDebug` with the An
 5. **Log tab**: raw ELM327 traffic; share it when something does not work with a particular adapter.
 
 The app reads mode 01 PID 01 (MIL), 03 (stored), 07 (pending), 0A (permanent), 09 PID 02 (VIN), and executes mode 04 for clearing. Keep the ignition on; clearing works with the engine off. Clearing also resets readiness monitors and freeze-frame data.
+
+## iPhone app
+
+**Hardware constraint**: iOS does not allow third-party apps to talk to Bluetooth Classic (SPP) devices, which is what most cheap "ELM327 Bluetooth" dongles are. An iPhone can only use **Bluetooth LE (4.0)** adapters (e.g. Vgate iCar Pro BLE, OBDLink CX, Veepeak OBDCheck BLE+, "ELM327 BLE 4.0" listings). If the adapter does not appear in the app's scan list, it is a Classic one: use Android for it, or buy a BLE model.
+
+The app has the same three tabs as Android (Veicolo, Officina for admins, Log). The BLE layer picks the notify/write characteristics generically, so FFE0/FFF0/18F0-style adapters work without per-model configuration.
+
+iOS suspends apps in the background, so remote monitoring only receives commands while the app is open (the screen is kept awake while monitoring). The workshop direct mode is not affected.
+
+### Build
+
+`.github/workflows/ios.yml` runs on a macOS runner on every push touching `ios/`: Swift unit tests, simulator build, and an **unsigned** `DvGarageOBD-unsigned.ipa` published as workflow artifact. To run on a physical iPhone the IPA must be signed with an Apple ID or developer account, e.g. with Sideloadly/AltStore (free Apple ID, 7-day validity) or, for distribution, via Xcode/TestFlight with a paid developer account. Locally: `brew install xcodegen && cd ios && xcodegen generate && open DvGarageOBD.xcodeproj`.
